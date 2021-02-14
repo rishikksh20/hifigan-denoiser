@@ -97,13 +97,13 @@ class SpecDiscriminator(nn.Module):
         super(SpecDiscriminator, self).__init__()
 
         self.discriminators = nn.ModuleList([
-            Down2d(80, 32, (3, 9), (1, 2), (1, 4)),
+            Down2d(1, 32, (3, 9), (1, 2), (1, 4)),
             Down2d(32, 32, (3, 8), (1, 2), (1, 3)),
             Down2d(32, 32, (3, 8), (1, 2), (1, 3)),
             Down2d(32, 32, (3, 6), (1, 2), (1, 2)),
         ])
         self.conv = nn.Conv2d(32, 1, (32, 5), (32, 1), (0, 2))
-        self.pool = nn.AvgPool2d((1, 64))
+        self.pool = nn.AvgPool2d((1, 2))
 
     def forward(self, y, y_hat):
 
@@ -113,6 +113,8 @@ class SpecDiscriminator(nn.Module):
         fmap_g = []
         fmap_rs = []
         fmap_gs = []
+        y = y.unsqueeze(1)
+        y_hat = y_hat.unsqueeze(1)
         for i, d in enumerate(self.discriminators):
             y = d(y)
             y_hat = d(y_hat)
@@ -126,6 +128,7 @@ class SpecDiscriminator(nn.Module):
 
         y_hat = self.conv(y_hat)
         fmap_g.append(y_hat)
+
         y_hat = self.pool(y_hat)
         y_d_gs.append(torch.flatten(y_hat, 1, -1))
 

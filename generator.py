@@ -35,31 +35,18 @@ class ResidualConv1dGLU(nn.Module):
         if skip_out_channels is None:
             skip_out_channels = residual_channels
         if padding is None:
-            padding = (kernel_size - 1) // 2 * dilation
+            padding = (kernel_size - 1) // 2 * dilation   # For non causal dilated convolution
 
         self.conv = nn.Conv1d(residual_channels, gate_channels, kernel_size,
                               padding=padding, dilation=dilation,
                               bias=bias, *args, **kwargs)
-
-        # local conditioning
-        if cin_channels > 0:
-            self.conv1x1c = nn.Conv1d(cin_channels, gate_channels, 1, bias=bias)
-        else:
-            self.conv1x1c = None
-
-        # global conditioning
-        if gin_channels > 0:
-            self.conv1x1g = nn.Conv1d(gin_channels, gate_channels, 1, bias=bias)
-
-        else:
-            self.conv1x1g = None
 
         # conv output is split into two groups
         gate_out_channels = gate_channels // 2
         self.conv1x1_out = nn.Conv1d(gate_out_channels, residual_channels, 1, bias=bias)
         self.conv1x1_skip = nn.Conv1d(gate_out_channels, skip_out_channels, 1, bias=bias)
 
-    def forward(self, x, c=None, g=None):
+    def forward(self, x):
         """Forward
         Args:
             x (Tensor): B x C x T
@@ -68,6 +55,7 @@ class ResidualConv1dGLU(nn.Module):
         Returns:
             Tensor: output
         """
+
         residual = x
         x = F.dropout(x, p=self.dropout, training=self.training)
         splitdim = 1
@@ -75,19 +63,6 @@ class ResidualConv1dGLU(nn.Module):
 
         a, b = x.split(x.size(splitdim) // 2, dim=splitdim)
 
-        # local conditioning
-        if c is not None:
-            assert self.conv1x1c is not None
-            c = self.conv1x1c(c)
-            ca, cb = c.split(c.size(splitdim) // 2, dim=splitdim)
-            a, b = a + ca, b + cb
-
-        # global conditioning
-        if g is not None:
-            assert self.conv1x1g is not None
-            g = self.conv1x1g(g)
-            ga, gb = g.split(g.size(splitdim) // 2, dim=splitdim)
-            a, b = a + ga, b + gb
 
         x = torch.tanh(a) * torch.sigmoid(b)
 
@@ -106,13 +81,11 @@ class Generator(nn.Module):
                  num_layers=20, num_stacks=2,
                  kernel_size=3,
                  residual_channels=128, gate_channels=128, skip_out_channels=128,
-                 last_channels=(2048, 256),
                  ):
         super().__init__()
         assert num_layers % num_stacks == 0
         num_layers_per_stack = num_layers // num_stacks
-        self.l_diff = num_stacks * (2**num_layers_per_stack - 1)
-
+        # in_channels is 1 for RAW waveform otherwise quantize classes
         self.first_conv = nn.Conv1d(in_channels, residual_channels, 3, padding=1, bias=bias)
 
         self.conv_layers = nn.ModuleList()
@@ -130,24 +103,22 @@ class Generator(nn.Module):
 
         self.last_conv_layers = nn.Sequential(
             nn.ReLU(True),
-            nn.Conv1d(skip_out_channels, last_channels[0], 3, padding=1, bias=bias),
+            nn.Conv1d(skip_out_channels, skip_out_channels, 1, bias=True),
             nn.ReLU(True),
-            nn.Conv1d(last_channels[0], last_channels[1], 3, padding=1, bias=bias),
-            nn.Conv1d(last_channels[1], out_channels, 1, bias=True)
+            nn.Conv1d(skip_out_channels, out_channels, 1, bias=True),
         )
 
     def forward(self, x):
         x = self.first_conv(x)
-        skips = None
+        skips = 0
         for conv in self.conv_layers:
             x, h = conv(x)
-            if skips is None:
-                skips = h[..., self.l_diff:-self.l_diff]
-            else:
-                skips += h[..., self.l_diff:-self.l_diff]
+            skips += h
 
+        skips *= math.sqrt(1.0 / len(self.conv_layers))
         x = skips
         x = self.last_conv_layers(x)
+
 
         return x
 
@@ -161,3 +132,13 @@ def generator_loss(disc_outputs):
         loss += l
 
     return loss, gen_losses
+
+
+
+if __name__ == '__main__':
+
+    model = Generator(1)
+    x = torch.ones([2, 1, 16000])
+    y = model(x)
+    print("Shape of y", y.shape)
+    assert x.shape[-1] == y.shape[-1]

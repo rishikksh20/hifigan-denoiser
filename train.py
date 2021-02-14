@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DistributedSampler, DataLoader
 import torch.multiprocessing as mp
-from torch.distributed import init_process_group
+# from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel
 from dataset import MelDataset, mel_spectrogram, get_dataset_filelist
 from generator import Generator, generator_loss
@@ -21,9 +21,9 @@ torch.backends.cudnn.benchmark = True
 
 
 def train(rank, args, hp, hp_str):
-    if hp.train.num_gpus > 1:
-        init_process_group(backend=hp.dist.dist_config['dist_backend'], init_method=hp.dist.dist_config['dist_url'],
-                           world_size=hp.dist.dist_config['world_size'] * hp.train.num_gpus, rank=rank)
+    # if hp.train.num_gpus > 1:
+    #     init_process_group(backend=hp.dist.dist_backend, init_method=hp.dist.dist_url,
+    #                        world_size=hp.dist.world_size * hp.train.num_gpus, rank=rank)
 
     torch.cuda.manual_seed(hp.train.seed)
     device = torch.device('cuda:{:d}'.format(rank))
@@ -75,8 +75,7 @@ def train(rank, args, hp, hp_str):
     trainset = MelDataset(training_filelist, hp.data.input_wavs, hp.data.output_wavs, hp.audio.segment_length,
                           hp.audio.filter_length, hp.audio.n_mel_channels, hp.audio.hop_length, hp.audio.win_length,
                           hp.audio.sampling_rate, hp.audio.mel_fmin, hp.audio.mel_fmax, n_cache_reuse=0,
-                          shuffle=False if hp.train.num_gpus > 1 else True, fmax_loss=None, device=device,
-                          base_mels_path=hp.data.mel_path)
+                          shuffle=False if hp.train.num_gpus > 1 else True, fmax_loss=None, device=device)
 
     train_sampler = DistributedSampler(trainset) if hp.train.num_gpus > 1 else None
 
@@ -90,7 +89,7 @@ def train(rank, args, hp, hp_str):
         validset = MelDataset(validation_filelist, hp.data.input_wavs, hp.data.output_wavs, hp.audio.segment_length,
                           hp.audio.filter_length, hp.audio.n_mel_channels, hp.audio.hop_length, hp.audio.win_length,
                           hp.audio.sampling_rate, hp.audio.mel_fmin, hp.audio.mel_fmax, split=False, shuffle=False,
-                        n_cache_reuse=0, fmax_loss=None, device=device,  base_mels_path=hp.data.mel_path)
+                        n_cache_reuse=0, fmax_loss=None, device=device)
         validation_loader = DataLoader(validset, num_workers=1, shuffle=False,
                                        sampler=None,
                                        batch_size=1,
@@ -113,15 +112,14 @@ def train(rank, args, hp, hp_str):
         for i, batch in enumerate(train_loader):
             if rank == 0:
                 start_b = time.time()
-            x, y, y_, _, y_mel = batch
+            x, y, file, _, y_mel_loss = batch
             x = torch.autograd.Variable(x.to(device, non_blocking=True))
             y = torch.autograd.Variable(y.to(device, non_blocking=True))
-            y_ = torch.autograd.Variable(y_.to(device, non_blocking=True))
-            y_mel = torch.autograd.Variable(y_mel.to(device, non_blocking=True))
+            y_mel_loss = torch.autograd.Variable(y_mel_loss.to(device, non_blocking=True))
+            # y_mel = torch.autograd.Variable(y_mel.to(device, non_blocking=True))
+            x = x.unsqueeze(1)
             y = y.unsqueeze(1)
-            y_ = y_.unsqueeze(1)
-
-            y_g_hat = generator(y)
+            y_g_hat = generator(x)[..., :y.shape[-1]]
             y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
                                           hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
                                           hp.audio.mel_fmin, None)
@@ -129,11 +127,11 @@ def train(rank, args, hp, hp_str):
             optim_d.zero_grad()
 
             # SpecD
-            y_df_hat_r, y_df_hat_g, _, _ = specd(x, y_g_hat_mel.detach())
+            y_df_hat_r, y_df_hat_g, _, _ = specd(y_mel_loss, y_g_hat_mel.detach())
             loss_disc_f, losses_disc_f_r, losses_disc_f_g = discriminator_loss(y_df_hat_r, y_df_hat_g)
 
             # MSD
-            y_ds_hat_r, y_ds_hat_g, _, _ = msd(y_, y_g_hat.detach())
+            y_ds_hat_r, y_ds_hat_g, _, _ = msd(y, y_g_hat.detach())
             loss_disc_s, losses_disc_s_r, losses_disc_s_g = discriminator_loss(y_ds_hat_r, y_ds_hat_g)
 
             loss_disc_all = loss_disc_s + loss_disc_f
@@ -145,10 +143,13 @@ def train(rank, args, hp, hp_str):
             optim_g.zero_grad()
 
             # L1 Mel-Spectrogram Loss
-            loss_mel = F.l1_loss(y_mel, y_g_hat_mel) * 45
+            loss_mel = F.l1_loss(y_mel_loss, y_g_hat_mel)
 
-            y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = specd(x, y_g_hat_mel)
-            y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = msd(y_, y_g_hat)
+            # L1 Sample Loss
+            loss_sample = F.l1_loss(y, y_g_hat)
+
+            y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = specd(y_mel_loss, y_g_hat_mel)
+            y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = msd(y, y_g_hat)
             loss_fm_f = feature_loss(fmap_f_r, fmap_f_g)
             loss_fm_s = feature_loss(fmap_s_r, fmap_s_g)
             loss_gen_f, losses_gen_f = generator_loss(y_df_hat_g)
@@ -162,13 +163,15 @@ def train(rank, args, hp, hp_str):
                 # STDOUT logging
                 if steps % args.stdout_interval == 0:
                     with torch.no_grad():
-                        mel_error = F.l1_loss(y_mel, y_g_hat_mel).item()
+                        mel_error = F.l1_loss(y_mel_loss, y_g_hat_mel).item()
+                        sample_error =  F.l1_loss(y, y_g_hat)
 
-                    print('Steps : {:d}, Gen Loss Total : {:4.3f}, Mel-Spec. Error : {:4.3f}, s/b : {:4.3f}'.
-                          format(steps, loss_gen_all, mel_error, time.time() - start_b))
+                    print('Steps : {:d}, Gen Loss Total : {:4.3f}, Sample Error: {:4.3f}, '
+                          'Mel-Spec. Error : {:4.3f}, s/b : {:4.3f}'.
+                          format(steps, loss_gen_all, sample_error, mel_error, time.time() - start_b))
 
                 # checkpointing
-                if steps % hp.log.save_interval == 0 and steps != 0:
+                if steps % hp.logs.save_interval == 0 and steps != 0:
                     checkpoint_path = "{}/g_{:08d}".format(hp.logs.chkpt_dir, steps)
                     save_checkpoint(checkpoint_path,
                                     {'generator': (generator.module if hp.train.num_gpus > 1 else generator).state_dict()})
@@ -182,29 +185,33 @@ def train(rank, args, hp, hp_str):
                                      'epoch': epoch, 'hp_str': hp_str})
 
                 # Tensorboard summary logging
-                if steps % hp.log.summary_interval == 0:
+                if steps % hp.logs.summary_interval == 0:
                     sw.add_scalar("training/gen_loss_total", loss_gen_all, steps)
                     sw.add_scalar("training/mel_spec_error", mel_error, steps)
 
                 # Validation
-                if steps % hp.log.validation_interval == 0:  # and steps != 0:
+                if steps % hp.logs.validation_interval == 0:  # and steps != 0:
                     generator.eval()
                     torch.cuda.empty_cache()
                     val_err_tot = 0
                     with torch.no_grad():
                         for j, batch in enumerate(validation_loader):
-                            x, y, y_, _, y_mel = batch
-                            y_g_hat = generator(y.to(device))
-                            y_mel = torch.autograd.Variable(y_mel.to(device, non_blocking=True))
+                            x, y, file, y_mel, y_mel_loss = batch
+                            x = x.unsqueeze(1)
+                            y = y.unsqueeze(1).to(device)
+                            y_g_hat = generator(x.to(device))
+                            y_mel_loss = torch.autograd.Variable(y_mel_loss.to(device, non_blocking=True))
                             y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
                                           hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
                                           hp.audio.mel_fmin, None)
-                            val_err_tot += F.l1_loss(y_mel, y_g_hat_mel).item()
+                            val_err_tot += F.l1_loss(y_mel_loss, y_g_hat_mel).item()
+                            val_err_tot += F.l1_loss(y, y_g_hat).item()
 
                             if j <= 4:
                                 if steps == 0:
-                                    sw.add_audio('gt/y_{}'.format(j), y[0], steps, hp.audio.sampling_rate)
-                                    sw.add_figure('gt/y_spec_{}'.format(j), plot_spectrogram(x[0]), steps)
+                                    sw.add_audio('gt_noise/y_{}'.format(j), x[0], steps, hp.audio.sampling_rate)
+                                    sw.add_audio('gt_clean/y_{}'.format(j), y[0], steps, hp.audio.sampling_rate)
+                                    sw.add_figure('gt/y_spec_clean_{}'.format(j), plot_spectrogram(y_mel[0]), steps)
 
                                 sw.add_audio('generated/y_hat_{}'.format(j), y_g_hat[0], steps, hp.audio.sampling_rate)
                                 y_hat_spec = mel_spectrogram(y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
@@ -233,10 +240,8 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--group_name', default=None)
-    parser.add_argument('--input_wavs_dir', default='LJSpeech-1.1/wavs')
-    parser.add_argument('--input_mels_dir', default='ft_dataset')
-    parser.add_argument('--input_training_file', default='LJSpeech-1.1/training.txt')
-    parser.add_argument('--input_validation_file', default='LJSpeech-1.1/validation.txt')
+    parser.add_argument('--train_file', default='LJSpeech-1.1/training.txt')
+    parser.add_argument('--valid_file', default='LJSpeech-1.1/validation.txt')
     parser.add_argument('--checkpoint_path', default='cp_hifigan')
     parser.add_argument('--config', default='config.yaml')
     parser.add_argument('--training_epochs', default=3100, type=int)
@@ -249,16 +254,16 @@ def main():
     with open(args.config, 'r') as f:
         hp_str = ''.join(f.readlines())
 
-    torch.manual_seed(hp.seed)
+    torch.manual_seed(hp.train.seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(hp.seed)
+        torch.cuda.manual_seed(hp.train.seed)
         hp.train.num_gpus = torch.cuda.device_count()
         hp.train.batch_size = int(hp.train.batch_size / hp.train.num_gpus)
         print('Batch size per GPU :', hp.train.batch_size)
     else:
         pass
 
-    if hp.num_gpus > 1:
+    if hp.train.num_gpus > 1:
         mp.spawn(train, nprocs=hp.train.num_gpus, args=(args, hp, hp_str,))
     else:
         train(0, args, hp, hp_str)

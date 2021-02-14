@@ -5,28 +5,28 @@ data: # root path of train/validation data (either relative/absoulte path is ok)
 ---
 train:
   seed: 1234
-  num_gpus: 0
+  num_gpus: 1
   rep_discriminator: 1
-  discriminator_train_start_steps: 200000
-  num_workers: 8
-  batch_size: 16
+  discriminator_train_start_steps: 10
+  num_workers: 4
+  batch_size: 2
   optimizer: 'adam'
   adam:
-    lr: 0.0002
+    lr: 0.0001
     beta1: 0.5
     beta2: 0.9
     lr_decay: 0.999
 
 ---
 dist:
-  dist_backend: "nccl",
-  dist_url: "tcp://localhost:54321",
+  dist_backend: "nccl"
+  dist_url: "tcp://localhost:54321"
   world_size: 1
 
 ---
 audio:
   n_mel_channels: 80
-  segment_length: 32000
+  segment_length: 16000
   pad_short: 2000
   filter_length: 1024
   hop_length: 256 # WARNING: this can't be changed.
@@ -43,14 +43,13 @@ model:
   use_subband_stft_loss: False
   feat_loss: False
   out_channels: 1
-  in_channels: 1
+  in_channels: 1 # 32 or 1
   num_layers: 20
   num_stacks: 2
   kernel_size: 3
   residual_channels: 128
   gate_channels: 128
   skip_out_channels: 128
-  last_channels: (2048, 256)
   num_D : 3
   ndf : 16
   n_layers: 3
@@ -59,7 +58,7 @@ model:
 
 
 ---
-log:
+logs:
   summary_interval: 100
   validation_interval: 1000
   save_interval: 5000
