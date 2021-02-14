@@ -243,7 +243,7 @@ def main():
     parser.add_argument('--train_file', default='LJSpeech-1.1/training.txt')
     parser.add_argument('--valid_file', default='LJSpeech-1.1/validation.txt')
     parser.add_argument('--checkpoint_path', default='cp_hifigan')
-    parser.add_argument('--config', default='config.yaml')
+    parser.add_argument('-c', '--config', default='config.yaml')
     parser.add_argument('--training_epochs', default=3100, type=int)
     parser.add_argument('--stdout_interval', default=5, type=int)
     parser.add_argument('--fine_tuning', default=False, type=bool)
