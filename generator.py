@@ -101,9 +101,9 @@ class ResidualConv1dGLU(nn.Module):
         return x, s
 
 
-class DWaveNet(nn.Module):
+class Generator(nn.Module):
     def __init__(self, in_channels, out_channels=1, bias=False,
-                 num_layers=30, num_stacks=3,
+                 num_layers=20, num_stacks=2,
                  kernel_size=3,
                  residual_channels=128, gate_channels=128, skip_out_channels=128,
                  last_channels=(2048, 256),
@@ -150,3 +150,14 @@ class DWaveNet(nn.Module):
         x = self.last_conv_layers(x)
 
         return x
+
+
+def generator_loss(disc_outputs):
+    loss = 0
+    gen_losses = []
+    for dg in disc_outputs:
+        l = torch.mean((1-dg)**2)
+        gen_losses.append(l)
+        loss += l
+
+    return loss, gen_losses
