@@ -132,20 +132,21 @@ def train(rank, args, hp, hp_str):
                                               hp.audio.mel_fmin, None)
 
             if steps > hp.train.discriminator_train_start_steps:
-                optim_d.zero_grad()
+                for _ in range(hp.train.rep_discriminator):
+                    optim_d.zero_grad()
 
-                # SpecD
-                y_df_hat_r, y_df_hat_g, _, _ = specd(y_mel_loss, y_g_hat_mel.detach())
-                loss_disc_f, losses_disc_f_r, losses_disc_f_g = discriminator_loss(y_df_hat_r, y_df_hat_g)
+                    # SpecD
+                    y_df_hat_r, y_df_hat_g, _, _ = specd(y_mel_loss, y_g_hat_mel.detach())
+                    loss_disc_f, losses_disc_f_r, losses_disc_f_g = discriminator_loss(y_df_hat_r, y_df_hat_g)
 
-                # MSD
-                y_ds_hat_r, y_ds_hat_g, _, _ = msd(y, y_g_hat.detach())
-                loss_disc_s, losses_disc_s_r, losses_disc_s_g = discriminator_loss(y_ds_hat_r, y_ds_hat_g)
+                    # MSD
+                    y_ds_hat_r, y_ds_hat_g, _, _ = msd(y, y_g_hat.detach())
+                    loss_disc_s, losses_disc_s_r, losses_disc_s_g = discriminator_loss(y_ds_hat_r, y_ds_hat_g)
 
-                loss_disc_all = loss_disc_s + loss_disc_f
+                    loss_disc_all = loss_disc_s + loss_disc_f
 
-                loss_disc_all.backward()
-                optim_d.step()
+                    loss_disc_all.backward()
+                    optim_d.step()
 
             before_y_g_hat_mel = mel_spectrogram(before_y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
                                               hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
@@ -241,6 +242,9 @@ def train(rank, args, hp, hp_str):
                                     sw.add_figure('gt/y_spec_clean_{}'.format(j), plot_spectrogram(y_mel[0]), steps)
 
                                 sw.add_audio('generated/y_hat_{}'.format(j), before_y_g_hat[0], steps, hp.audio.sampling_rate)
+                                if y_g_hat is not None:
+                                    sw.add_audio('generated/y_hat_after_{}'.format(j), y_g_hat[0], steps,
+                                                 hp.audio.sampling_rate)
                                 y_hat_spec = mel_spectrogram(before_y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
                                           hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
                                           hp.audio.mel_fmin, None)
