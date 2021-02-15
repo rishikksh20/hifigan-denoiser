@@ -6,16 +6,22 @@ data: # root path of train/validation data (either relative/absoulte path is ok)
 train:
   seed: 1234
   num_gpus: 1
-  rep_discriminator: 1
-  discriminator_train_start_steps: 10
+  rep_discriminator: 2
+  discriminator_train_start_steps: 1000000
+  postnet_start_steps: 500000
   num_workers: 4
   batch_size: 2
   optimizer: 'adam'
-  adam:
-    lr: 0.0001
+  adamG:
+    lr: 0.001
     beta1: 0.5
     beta2: 0.9
     lr_decay: 0.999
+  adamD:
+    lr: 0.001
+    beta1: 0.5
+    beta2: 0.9
+
 
 ---
 dist:
@@ -26,7 +32,7 @@ dist:
 ---
 audio:
   n_mel_channels: 80
-  segment_length: 16000
+  segment_length: 32000
   pad_short: 2000
   filter_length: 1024
   hop_length: 256 # WARNING: this can't be changed.
@@ -56,6 +62,11 @@ model:
   downsampling_factor: 4
   disc_out: 512
 
+stft_loss_params:
+    fft_sizes: [1024, 2048, 512]  # List of FFT size for STFT-based loss.
+    hop_sizes: [120, 240, 50]     # List of hop size for STFT-based loss
+    win_lengths: [600, 1200, 240] # List of window length for STFT-based loss.
+    window: "hann_window"         # Window function for STFT-based loss
 
 ---
 logs:

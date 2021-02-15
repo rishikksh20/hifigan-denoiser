@@ -11,6 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DistributedSampler, DataLoader
 import torch.multiprocessing as mp
 # from torch.distributed import init_process_group
+from stft_loss import MultiResolutionSTFTLoss
 from torch.nn.parallel import DistributedDataParallel
 from dataset import MelDataset, mel_spectrogram, get_dataset_filelist
 from generator import Generator, generator_loss
@@ -31,6 +32,7 @@ def train(rank, args, hp, hp_str):
     generator = Generator(hp.model.in_channels, hp.model.out_channels).to(device)
     specd = SpecDiscriminator().to(device)
     msd = MultiScaleDiscriminator().to(device)
+    stft_loss = MultiResolutionSTFTLoss()
 
     if rank == 0:
         print(generator)
@@ -101,6 +103,7 @@ def train(rank, args, hp, hp_str):
     generator.train()
     specd.train()
     msd.train()
+    with_postnet = False
     for epoch in range(max(0, last_epoch), args.training_epochs):
         if rank == 0:
             start = time.time()
@@ -112,6 +115,8 @@ def train(rank, args, hp, hp_str):
         for i, batch in enumerate(train_loader):
             if rank == 0:
                 start_b = time.time()
+            if steps > hp.train.postnet_start_steps:
+                with_postnet = True
             x, y, file, _, y_mel_loss = batch
             x = torch.autograd.Variable(x.to(device, non_blocking=True))
             y = torch.autograd.Variable(y.to(device, non_blocking=True))
@@ -119,42 +124,62 @@ def train(rank, args, hp, hp_str):
             # y_mel = torch.autograd.Variable(y_mel.to(device, non_blocking=True))
             x = x.unsqueeze(1)
             y = y.unsqueeze(1)
-            y_g_hat = generator(x)[..., :y.shape[-1]]
-            y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
-                                          hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
-                                          hp.audio.mel_fmin, None)
+            before_y_g_hat, y_g_hat = generator(x, with_postnet)[..., :y.shape[-1]]
 
-            optim_d.zero_grad()
+            if y_g_hat is not None:
+                y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
+                                              hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
+                                              hp.audio.mel_fmin, None)
 
-            # SpecD
-            y_df_hat_r, y_df_hat_g, _, _ = specd(y_mel_loss, y_g_hat_mel.detach())
-            loss_disc_f, losses_disc_f_r, losses_disc_f_g = discriminator_loss(y_df_hat_r, y_df_hat_g)
+            if steps > hp.train.discriminator_train_start_steps:
+                optim_d.zero_grad()
 
-            # MSD
-            y_ds_hat_r, y_ds_hat_g, _, _ = msd(y, y_g_hat.detach())
-            loss_disc_s, losses_disc_s_r, losses_disc_s_g = discriminator_loss(y_ds_hat_r, y_ds_hat_g)
+                # SpecD
+                y_df_hat_r, y_df_hat_g, _, _ = specd(y_mel_loss, y_g_hat_mel.detach())
+                loss_disc_f, losses_disc_f_r, losses_disc_f_g = discriminator_loss(y_df_hat_r, y_df_hat_g)
 
-            loss_disc_all = loss_disc_s + loss_disc_f
+                # MSD
+                y_ds_hat_r, y_ds_hat_g, _, _ = msd(y, y_g_hat.detach())
+                loss_disc_s, losses_disc_s_r, losses_disc_s_g = discriminator_loss(y_ds_hat_r, y_ds_hat_g)
 
-            loss_disc_all.backward()
-            optim_d.step()
+                loss_disc_all = loss_disc_s + loss_disc_f
 
+                loss_disc_all.backward()
+                optim_d.step()
+
+            before_y_g_hat_mel = mel_spectrogram(before_y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
+                                              hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
+                                              hp.audio.mel_fmin, None)
             # Generator
             optim_g.zero_grad()
 
             # L1 Mel-Spectrogram Loss
-            loss_mel = F.l1_loss(y_mel_loss, y_g_hat_mel)
+            # before_loss_mel = F.l1_loss(y_mel_loss, before_y_g_hat_mel)
+            sc_loss, mag_loss = stft_loss(before_y_g_hat[:, :, :y.size(2)].squeeze(1), y.squeeze(1))
+            before_loss_mel = sc_loss + mag_loss
 
             # L1 Sample Loss
-            loss_sample = F.l1_loss(y, y_g_hat)
+            before_loss_sample = F.l1_loss(y, before_y_g_hat)
+            loss_gen_all = before_loss_mel + before_loss_sample
 
-            y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = specd(y_mel_loss, y_g_hat_mel)
-            y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = msd(y, y_g_hat)
-            loss_fm_f = feature_loss(fmap_f_r, fmap_f_g)
-            loss_fm_s = feature_loss(fmap_s_r, fmap_s_g)
-            loss_gen_f, losses_gen_f = generator_loss(y_df_hat_g)
-            loss_gen_s, losses_gen_s = generator_loss(y_ds_hat_g)
-            loss_gen_all = loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f + loss_mel
+            if y_g_hat is not None:
+                # L1 Mel-Spectrogram Loss
+                # loss_mel = F.l1_loss(y_mel_loss, y_g_hat_mel)
+                sc_loss_, mag_loss_ = stft_loss(y_g_hat[:, :, :y.size(2)].squeeze(1), y.squeeze(1))
+                loss_mel = sc_loss_ + mag_loss_
+                # L1 Sample Loss
+                loss_sample = F.l1_loss(y, y_g_hat)
+                loss_gen_all += loss_mel + loss_sample
+
+
+            if steps > hp.train.discriminator_train_start_steps:
+                y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = specd(y_mel_loss, y_g_hat_mel)
+                y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = msd(y, y_g_hat)
+                loss_fm_f = feature_loss(fmap_f_r, fmap_f_g)
+                loss_fm_s = feature_loss(fmap_s_r, fmap_s_g)
+                loss_gen_f, losses_gen_f = generator_loss(y_df_hat_g)
+                loss_gen_s, losses_gen_s = generator_loss(y_ds_hat_g)
+                loss_gen_all += hp.model.lambda_adv * (loss_gen_s + loss_gen_f + loss_fm_s + loss_fm_f)
 
             loss_gen_all.backward()
             optim_g.step()
@@ -163,8 +188,8 @@ def train(rank, args, hp, hp_str):
                 # STDOUT logging
                 if steps % args.stdout_interval == 0:
                     with torch.no_grad():
-                        mel_error = F.l1_loss(y_mel_loss, y_g_hat_mel).item()
-                        sample_error =  F.l1_loss(y, y_g_hat)
+                        mel_error = F.l1_loss(y_mel_loss, before_y_g_hat_mel).item()
+                        sample_error =  F.l1_loss(y, before_y_g_hat)
 
                     print('Steps : {:d}, Gen Loss Total : {:4.3f}, Sample Error: {:4.3f}, '
                           'Mel-Spec. Error : {:4.3f}, s/b : {:4.3f}'.
@@ -199,13 +224,15 @@ def train(rank, args, hp, hp_str):
                             x, y, file, y_mel, y_mel_loss = batch
                             x = x.unsqueeze(1)
                             y = y.unsqueeze(1).to(device)
-                            y_g_hat = generator(x.to(device))
+                            before_y_g_hat, y_g_hat = generator(x.to(device))
                             y_mel_loss = torch.autograd.Variable(y_mel_loss.to(device, non_blocking=True))
-                            y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
+                            y_g_hat_mel = mel_spectrogram(before_y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
                                           hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
                                           hp.audio.mel_fmin, None)
                             val_err_tot += F.l1_loss(y_mel_loss, y_g_hat_mel).item()
-                            val_err_tot += F.l1_loss(y, y_g_hat).item()
+                            val_err_tot += F.l1_loss(y, before_y_g_hat).item()
+                            if y_g_hat is not None:
+                                val_err_tot += F.l1_loss(y, y_g_hat).item()
 
                             if j <= 4:
                                 if steps == 0:
@@ -213,8 +240,8 @@ def train(rank, args, hp, hp_str):
                                     sw.add_audio('gt_clean/y_{}'.format(j), y[0], steps, hp.audio.sampling_rate)
                                     sw.add_figure('gt/y_spec_clean_{}'.format(j), plot_spectrogram(y_mel[0]), steps)
 
-                                sw.add_audio('generated/y_hat_{}'.format(j), y_g_hat[0], steps, hp.audio.sampling_rate)
-                                y_hat_spec = mel_spectrogram(y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
+                                sw.add_audio('generated/y_hat_{}'.format(j), before_y_g_hat[0], steps, hp.audio.sampling_rate)
+                                y_hat_spec = mel_spectrogram(before_y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
                                           hp.audio.sampling_rate, hp.audio.hop_length, hp.audio.win_length,
                                           hp.audio.mel_fmin, None)
                                 sw.add_figure('generated/y_hat_spec_{}'.format(j),

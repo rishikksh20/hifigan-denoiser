@@ -7,6 +7,116 @@ from torch import nn
 from torch.nn import functional as F
 
 
+class Postnet(torch.nn.Module):
+    """Postnet module for Spectrogram prediction network.
+    This is a module of Postnet in Spectrogram prediction network,
+    which described in `Natural TTS Synthesis by
+    Conditioning WaveNet on Mel Spectrogram Predictions`_.
+    The Postnet predicts refines the predicted
+    Mel-filterbank of the decoder,
+    which helps to compensate the detail sturcture of spectrogram.
+    .. _`Natural TTS Synthesis by Conditioning WaveNet on Mel Spectrogram Predictions`:
+       https://arxiv.org/abs/1712.05884
+    """
+
+    def __init__(
+        self,
+        idim: int,
+        odim: int,
+        n_layers: int = 5,
+        n_chans: int = 512,
+        n_filts: int = 5,
+        dropout_rate: float = 0.5,
+        use_batch_norm: bool = True,
+    ):
+        """Initialize postnet module.
+        Args:
+            idim (int): Dimension of the inputs.
+            odim (int): Dimension of the outputs.
+            n_layers (int, optional): The number of layers.
+            n_filts (int, optional): The number of filter size.
+            n_units (int, optional): The number of filter channels.
+            use_batch_norm (bool, optional): Whether to use batch normalization..
+            dropout_rate (float, optional): Dropout rate..
+        """
+        super(Postnet, self).__init__()
+        self.postnet = torch.nn.ModuleList()
+        for layer in range(n_layers - 1):
+            ichans = odim if layer == 0 else n_chans
+            ochans = odim if layer == n_layers - 1 else n_chans
+            if use_batch_norm:
+                self.postnet += [
+                    torch.nn.Sequential(
+                        torch.nn.Conv1d(
+                            ichans,
+                            ochans,
+                            n_filts,
+                            stride=1,
+                            padding=(n_filts - 1) // 2,
+                            bias=False,
+                        ),
+                        torch.nn.BatchNorm1d(ochans),
+                        torch.nn.Tanh(),
+                        torch.nn.Dropout(dropout_rate),
+                    )
+                ]
+            else:
+                self.postnet += [
+                    torch.nn.Sequential(
+                        torch.nn.Conv1d(
+                            ichans,
+                            ochans,
+                            n_filts,
+                            stride=1,
+                            padding=(n_filts - 1) // 2,
+                            bias=False,
+                        ),
+                        torch.nn.Tanh(),
+                        torch.nn.Dropout(dropout_rate),
+                    )
+                ]
+        ichans = n_chans if n_layers != 1 else odim
+        if use_batch_norm:
+            self.postnet += [
+                torch.nn.Sequential(
+                    torch.nn.Conv1d(
+                        ichans,
+                        odim,
+                        n_filts,
+                        stride=1,
+                        padding=(n_filts - 1) // 2,
+                        bias=False,
+                    ),
+                    torch.nn.BatchNorm1d(odim),
+                    torch.nn.Dropout(dropout_rate),
+                )
+            ]
+        else:
+            self.postnet += [
+                torch.nn.Sequential(
+                    torch.nn.Conv1d(
+                        ichans,
+                        odim,
+                        n_filts,
+                        stride=1,
+                        padding=(n_filts - 1) // 2,
+                        bias=False,
+                    ),
+                    torch.nn.Dropout(dropout_rate),
+                )
+            ]
+
+    def forward(self, xs):
+        """Calculate forward propagation.
+        Args:
+            xs (Tensor): Batch of the sequences of padded input tensors (B, idim, Tmax).
+        Returns:
+            Tensor: Batch of padded output tensor. (B, odim, Tmax).
+        """
+        for postnet in self.postnet:
+            xs = postnet(xs)
+        return xs
+
 class ResidualConv1dGLU(nn.Module):
     """Residual dilated conv1d + Gated linear unit
     Args:
@@ -78,10 +188,9 @@ class ResidualConv1dGLU(nn.Module):
 
 class Generator(nn.Module):
     def __init__(self, in_channels, out_channels=1, bias=False,
-                 num_layers=20, num_stacks=2,
-                 kernel_size=3,
+                 num_layers=20, num_stacks=2, kernel_size=3,
                  residual_channels=128, gate_channels=128, skip_out_channels=128,
-                 ):
+                 postnet_layers=12, postnet_filts=32, use_batch_norm=False, postnet_dropout_rate=0.5):
         super().__init__()
         assert num_layers % num_stacks == 0
         num_layers_per_stack = num_layers // num_stacks
@@ -108,7 +217,21 @@ class Generator(nn.Module):
             nn.Conv1d(skip_out_channels, out_channels, 1, bias=True),
         )
 
-    def forward(self, x):
+        self.postnet = (
+            None
+            if postnet_layers == 0
+            else Postnet(
+                idim=in_channels,
+                odim=out_channels,
+                n_layers=postnet_layers,
+                n_chans=residual_channels,
+                n_filts=postnet_filts,
+                use_batch_norm=use_batch_norm,
+                dropout_rate=postnet_dropout_rate,
+            )
+        )
+
+    def forward(self, x, with_postnet=False):
         x = self.first_conv(x)
         skips = 0
         for conv in self.conv_layers:
@@ -118,9 +241,12 @@ class Generator(nn.Module):
         skips *= math.sqrt(1.0 / len(self.conv_layers))
         x = skips
         x = self.last_conv_layers(x)
+        if not with_postnet:
+            return x, None
+        else:
+            after_x = self.postnet(x)
+            return x, after_x
 
-
-        return x
 
 
 def generator_loss(disc_outputs):
