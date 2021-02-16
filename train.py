@@ -124,7 +124,7 @@ def train(rank, args, hp, hp_str):
             # y_mel = torch.autograd.Variable(y_mel.to(device, non_blocking=True))
             x = x.unsqueeze(1)
             y = y.unsqueeze(1)
-            before_y_g_hat, y_g_hat = generator(x, with_postnet)[..., :y.shape[-1]]
+            before_y_g_hat, y_g_hat = generator(x, with_postnet)
 
             if y_g_hat is not None:
                 y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), hp.audio.filter_length, hp.audio.n_mel_channels,
