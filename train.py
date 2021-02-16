@@ -61,16 +61,16 @@ def train(rank, args, hp, hp_str):
         specd = DistributedDataParallel(specd, device_ids=[rank]).to(device)
         msd = DistributedDataParallel(msd, device_ids=[rank]).to(device)
 
-    optim_g = torch.optim.AdamW(generator.parameters(), hp.train.adam.lr, betas=[hp.train.adam.beta1, hp.train.adam.beta2])
+    optim_g = torch.optim.AdamW(generator.parameters(), hp.train.adamG.lr, betas=[hp.train.adamG.beta1, hp.train.adamG.beta2])
     optim_d = torch.optim.AdamW(itertools.chain(msd.parameters(), specd.parameters()),
-                                hp.train.adam.lr, betas=[hp.train.adam.beta1, hp.train.adam.beta2])
+                                hp.train.adamD.lr, betas=[hp.train.adamD.beta1, hp.train.adamD.beta2])
 
     if state_dict_do is not None:
         optim_g.load_state_dict(state_dict_do['optim_g'])
         optim_d.load_state_dict(state_dict_do['optim_d'])
 
-    scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hp.train.adam.lr_decay, last_epoch=last_epoch)
-    scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hp.train.adam.lr_decay, last_epoch=last_epoch)
+    # scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hp.train.adam.lr_decay, last_epoch=last_epoch)
+    # scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hp.train.adam.lr_decay, last_epoch=last_epoch)
 
     training_filelist, validation_filelist = get_dataset_filelist(args)
 
@@ -258,8 +258,8 @@ def train(rank, args, hp, hp_str):
 
             steps += 1
 
-        scheduler_g.step()
-        scheduler_d.step()
+        # scheduler_g.step()
+        # scheduler_d.step()
 
         if rank == 0:
             print('Time taken for epoch {} is {} sec\n'.format(epoch + 1, int(time.time() - start)))
