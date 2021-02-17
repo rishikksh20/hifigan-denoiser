@@ -7,6 +7,7 @@ import numpy as np
 from librosa.util import normalize
 from scipy.io.wavfile import read
 from librosa.filters import mel as librosa_mel_fn
+from torch_audiomentations import AddBackgroundNoise, ApplyImpulseResponse, PeakNormalization, PolarityInversion, Compose, Gain
 
 MAX_WAV_VALUE = 32768.0
 
@@ -106,6 +107,7 @@ class MelDataset(torch.utils.data.Dataset):
         self._cache_ref_count = 0
         self.device = device
         self.fine_tuning = False
+        self.augment = True
 
     def __getitem__(self, index):
         filename = self.audio_files[index]
@@ -139,7 +141,21 @@ class MelDataset(torch.utils.data.Dataset):
         output_audio = torch.FloatTensor(output_audio)
         output_audio = output_audio.unsqueeze(0)
 
+        apply_augmentation = Compose(transforms=[
+            AddBackgroundNoise(background_paths="./background_noise_22050/", p=0.9, min_snr_in_db= 0, max_snr_in_db=33),
+            ApplyImpulseResponse(ir_paths="./IR_MIT_16/", p=0.9),
+            PeakNormalization(p = 0.9),
+            Gain( min_gain_in_db=-15.0, max_gain_in_db=5.0, p=0.5,) ])
+
+
+        if self.augment:
+            #print(input_audio.shape, input_audio.dtype) # [1, T]
+            input_audio = apply_augmentation(input_audio.unsqueeze(1), sample_rate=22500)
+            input_audio = input_audio.squeeze(1)
+            print(input_audio.shape, output_audio.shape)
+
         assert input_audio.size(1) == output_audio.size(1), "Inconsistent dataset length, unable to sampling"
+
 
         #if not self.fine_tuning:
         if self.split:
@@ -149,8 +165,11 @@ class MelDataset(torch.utils.data.Dataset):
                 input_audio = input_audio[:, audio_start:audio_start+self.segment_size]
                 output_audio = output_audio[:, audio_start:audio_start+self.segment_size]
             else:
-                input_audio = torch.nn.functional.pad(input_audio, (0, self.segment_size - input_audio.size(1)), 'constant')
+                input_audio = torch.nn.functional.pad(input_audio, (0, self.segment_size - input_audio.size(1)), 'constant')   #
                 output_audio = torch.nn.functional.pad(output_audio, (0, self.segment_size - input_audio.size(1)), 'constant')
+
+
+
 
         mel = mel_spectrogram(output_audio, self.n_fft, self.num_mels,
                               self.sampling_rate, self.hop_size, self.win_size, self.fmin, self.fmax,

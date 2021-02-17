@@ -1,7 +1,7 @@
 data: # root path of train/validation data (either relative/absoulte path is ok)
-  input_wavs: 'data\wavs'
-  output_wavs: 'data\clean'
-  mel_path: 'data\mels'
+  input_wavs: '/FastSpeech2/wavs'
+  output_wavs: '/FastSpeech2/wavs'
+  mel_path: '/FastSpeech2/preprocessed_testing/mels'
 ---
 train:
   seed: 1234
@@ -10,7 +10,7 @@ train:
   discriminator_train_start_steps: 1000000
   postnet_start_steps: 500000
   num_workers: 4
-  batch_size: 2
+  batch_size: 1
   optimizer: 'adam'
   adamG:
     lr: 0.001

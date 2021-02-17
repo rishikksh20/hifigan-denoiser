@@ -97,6 +97,7 @@ def train(rank, args, hp, hp_str):
                                        batch_size=1,
                                        pin_memory=True,
                                        drop_last=True)
+        print(len(validation_loader))
 
         sw = SummaryWriter(os.path.join(hp.logs.chkpt_dir, 'logs'))
 
@@ -271,8 +272,8 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--group_name', default=None)
-    parser.add_argument('--train_file', default='LJSpeech-1.1/training.txt')
-    parser.add_argument('--valid_file', default='LJSpeech-1.1/validation.txt')
+    parser.add_argument('--train_file', default='./filelist/training.txt')
+    parser.add_argument('--valid_file', default='./filelist/validation.txt')
     parser.add_argument('--checkpoint_path', default='cp_hifigan')
     parser.add_argument('-c', '--config', default='config.yaml')
     parser.add_argument('--training_epochs', default=3100, type=int)
