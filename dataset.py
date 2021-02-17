@@ -7,8 +7,8 @@ import numpy as np
 from librosa.util import normalize
 from scipy.io.wavfile import read
 from librosa.filters import mel as librosa_mel_fn
-from torch_audiomentations import AddBackgroundNoise, ApplyImpulseResponse, PeakNormalization, PolarityInversion, Compose, Gain
-
+from audiomentations import Compose
+from audiomentations.augmentations.transforms import AddBackgroundNoise, AddImpulseResponse, PolarityInversion, Gain
 MAX_WAV_VALUE = 32768.0
 
 
@@ -142,16 +142,18 @@ class MelDataset(torch.utils.data.Dataset):
         output_audio = output_audio.unsqueeze(0)
 
         apply_augmentation = Compose(transforms=[
-            AddBackgroundNoise(background_paths="./background_noise_22050/", p=0.9, min_snr_in_db= 0, max_snr_in_db=33),
-            ApplyImpulseResponse(ir_paths="./IR_MIT_16/", p=0.9),
-            PeakNormalization(p = 0.9),
+            AddBackgroundNoise(sounds_path="./background_noise_22050/", p=0.9, min_snr_in_db= 0, max_snr_in_db=33),
+            AddImpulseResponse(ir_path="./IR_MIT_16/", p=0.9),
+            #PeakNormalization(p = 0.9),
             Gain( min_gain_in_db=-15.0, max_gain_in_db=5.0, p=0.5,) ])
 
-
+        assert input_audio.size(1) == output_audio.size(1), "Inconsistent dataset length, unable to sampling"
+        #print(input_audio.min(), input_audio.max(),output_audio.min(), output_audio.max(), )
         if self.augment:
             #print(input_audio.shape, input_audio.dtype) # [1, T]
-            input_audio = apply_augmentation(input_audio.unsqueeze(1), sample_rate=22500)
-            input_audio = input_audio.squeeze(1)
+            input_audio = apply_augmentation(input_audio.squeeze(0).detach().cpu().numpy(), sample_rate=22500)
+            input_audio = torch.from_numpy(input_audio).unsqueeze(0)
+            input_audio = input_audio[:, 0:output_audio.size(1)]
             print(input_audio.shape, output_audio.shape)
 
         assert input_audio.size(1) == output_audio.size(1), "Inconsistent dataset length, unable to sampling"
