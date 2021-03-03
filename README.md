@@ -2,6 +2,18 @@
 This is a Unofficial Pytorch implementation of the paper [HiFi-GAN: High Fidelity Denoising and Dereverberation Based on Speech Deep Features in Adversarial Networks](https://arxiv.org/pdf/2006.05694).
 ![](./assets/model.PNG)
 
+## Citations
+```
+@misc{su2020hifigan,
+      title={HiFi-GAN: High-Fidelity Denoising and Dereverberation Based on Speech Deep Features in Adversarial Networks}, 
+      author={Jiaqi Su and Zeyu Jin and Adam Finkelstein},
+      year={2020},
+      eprint={2006.05694},
+      archivePrefix={arXiv},
+      primaryClass={eess.AS}
+}
+```
+
 ## Requirement
 Tested on Python 3.6
 ```bash
