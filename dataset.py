@@ -150,7 +150,7 @@ class MelDataset(torch.utils.data.Dataset):
                 output_audio = output_audio[:, audio_start:audio_start+self.segment_size]
             else:
                 input_audio = torch.nn.functional.pad(input_audio, (0, self.segment_size - input_audio.size(1)), 'constant')
-                output_audio = torch.nn.functional.pad(output_audio, (0, self.segment_size - input_audio.size(1)), 'constant')
+                output_audio = torch.nn.functional.pad(output_audio, (0, self.segment_size - output_audio.size(1)), 'constant')
 
         mel = mel_spectrogram(output_audio, self.n_fft, self.num_mels,
                               self.sampling_rate, self.hop_size, self.win_size, self.fmin, self.fmax,
